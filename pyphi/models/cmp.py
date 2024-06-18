@@ -7,7 +7,10 @@ Utilities for comparing phi-objects.
 """
 
 import functools
-from collections.abc import Iterable
+try:
+    from collections import Iterable
+except ImportError:
+    from collections.abc import Iterable
 
 import numpy as np
 
@@ -62,6 +65,7 @@ class Orderable:
         """
         raise NotImplementedError
 
+    @sametype
     def __lt__(self, other):
         if not general_eq(self, other, self.unorderable_unless_eq):
             raise TypeError(
@@ -71,35 +75,29 @@ class Orderable:
             )
         return self.order_by() < other.order_by()
 
+    @sametype
     def __le__(self, other):
         return self < other or self == other
 
+    @sametype
     def __gt__(self, other):
         return other < self
 
+    @sametype
     def __ge__(self, other):
         return other < self or self == other
 
+    @sametype
     def __eq__(self, other):
         raise NotImplementedError
 
+    @sametype
     def __ne__(self, other):
         return not self == other
 
 
-class OrderableByPhi(Orderable):
-    """Mixin for implementing rich object comparisons on phi-objects that are ordered solely by their phi values.
-
-    Inherits from Orderable.
-    """
-
-    def order_by(self):
-        return self.phi
-
-
 # Equality helpers
 # =============================================================================
-
 
 # TODO use builtin numpy methods here
 def numpy_aware_eq(a, b):
@@ -108,7 +106,6 @@ def numpy_aware_eq(a, b):
     """
     if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
         return np.array_equal(a, b)
-    # TODO(4.0) this is broken if the iterables are sets
     if (
         (isinstance(a, Iterable) and isinstance(b, Iterable))
         and not isinstance(a, str)

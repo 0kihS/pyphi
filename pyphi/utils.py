@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # utils.py
 
 """
@@ -6,39 +8,20 @@ external use.
 """
 
 import hashlib
-import math
-import operator
 import os
 from itertools import chain, combinations, product
-from typing import Tuple
+from time import time
 
+import decorator
 import numpy as np
 from scipy.special import comb
-from toolz import curry
 
-from .conf import config
-
-
-# TODO(states) refactor
-def substate(
-    nodes: Tuple[int], state: Tuple[int], node_subset: Tuple[int]
-) -> Tuple[int]:
-    return tuple(state[nodes.index(n)] for n in node_subset)
+from . import config, constants
 
 
 def state_of(nodes, network_state):
     """Return the state-tuple of the given nodes."""
     return tuple(network_state[n] for n in nodes) if nodes else ()
-
-
-def state_of_subsystem_nodes(node_indices, nodes, subsystem_state):
-    """Return the state of the nodes, given a subsystem state-tuple.
-
-    Deals with using the network-relative node indices nodes with a state-tuple
-    for only the subsystem nodes.
-    """
-    # Get indices relative to subsystem indices
-    return state_of([node_indices.index(n) for n in nodes], subsystem_state)
 
 
 def all_states(n, big_endian=False):
@@ -50,7 +33,7 @@ def all_states(n, big_endian=False):
             instead of little-endian order.
 
     Yields:
-        Tuple[int]: The next state of an ``n``-element system, in little-endian
+        tuple[int]: The next state of an ``n``-element system, in little-endian
         order unless ``big_endian`` is ``True``.
     """
     if n == 0:
@@ -100,26 +83,7 @@ class np_hashable:
 
 def eq(x, y):
     """Compare two values up to |PRECISION|."""
-    # TODO(4.0) just use float value in config
-    epsilon = 10 ** (-config.PRECISION)
-    return math.isclose(x, y, rel_tol=epsilon, abs_tol=epsilon)
-
-
-def is_positive(x):
-    """Return whether ``x`` is positive up to |PRECISION|."""
-    # Need `bool` to cast from numpy to native Boolean
-    return not eq(x, 0) and bool(x > 0)
-
-
-def is_nonpositive(x):
-    """Return True if x is a nonpositive value."""
-    # Need `bool` to cast from numpy to native Boolean
-    return bool(x <= 0)
-
-
-def is_falsy(x):
-    """Return True if x is a falsy value."""
-    return not x
+    return abs(x - y) <= constants.EPSILON
 
 
 # see http://stackoverflow.com/questions/16003217
@@ -178,20 +142,16 @@ def comb_indices(n, k):
     return indices.reshape(-1, k)
 
 
-# Based on https://docs.python.org/3/library/itertools.html#itertools-recipes
-def powerset(iterable, nonempty=False, reverse=False, min_size=0, max_size=None):
+# From https://docs.python.org/3/library/itertools.html#itertools-recipes
+def powerset(iterable, nonempty=False, reverse=False):
     """Generate the power set of an iterable.
 
     Args:
-        iterable (Iterable): The iterable of which to generate the power set.
+        iterable (Iterable): The iterable from which to generate the power set.
 
     Keyword Args:
         nonempty (boolean): If True, don't include the empty set.
         reverse (boolean): If True, reverse the order of the powerset.
-        min_size (int | None): Only generate subsets of this size or larger.
-            Defaults to None, meaning no restriction. Overrides ``nonempty``.
-        max_size (int | None): Only generate subsets of this size or smaller.
-            Defaults to None, meaning no restriction.
 
     Returns:
         Iterable: An iterator over the power set.
@@ -206,25 +166,15 @@ def powerset(iterable, nonempty=False, reverse=False, min_size=0, max_size=None)
         >>> ps = powerset(np.arange(2), nonempty=True, reverse=True)
         >>> list(ps)
         [(1, 0), (1,), (0,)]
-        >>> ps = powerset(np.arange(3), max_size=2)
-        >>> list(ps)
-        [(), (0,), (1,), (2,), (0, 1), (0, 2), (1, 2)]
-        >>> ps = powerset(np.arange(3), min_size=2)
-        >>> list(ps)
-        [(0, 1), (0, 2), (1, 2), (0, 1, 2)]
-        >>> ps = powerset(np.arange(3), min_size=2, max_size=2)
-        >>> list(ps)
-        [(0, 1), (0, 2), (1, 2)]
     """
     iterable = list(iterable)
 
-    if nonempty and min_size <= 0:  # Don't include 0-length subsets
-        min_size = 1
+    if nonempty:  # Don't include 0-length subsets
+        start = 1
+    else:
+        start = 0
 
-    if max_size is None:
-        max_size = len(iterable)
-
-    seq_sizes = range(min_size, max_size + 1)
+    seq_sizes = range(start, len(iterable) + 1)
 
     if reverse:
         seq_sizes = reversed(seq_sizes)
@@ -251,151 +201,17 @@ def load_data(directory, num):
     return [np.load(get_path(i), allow_pickle=True) for i in range(num)]
 
 
-def specified_substate(purview, specified_state, subset):
-    purview_relative_subset = [purview.index(node) for node in subset]
-    return specified_state[:, purview_relative_subset]
+# Using ``decorator`` preserves the function signature of the wrapped function,
+# allowing joblib to properly introspect the function arguments.
+@decorator.decorator
+def time_annotated(func, *args, **kwargs):
+    """Annotate the decorated function or method with the total execution
+    time.
 
-
-def extremum_with_short_circuit(
-    seq,
-    value_func=lambda item: item.phi,
-    cmp=operator.lt,
-    initial=float("inf"),
-    shortcircuit_value=0,
-    shortcircuit_callback=None,
-):
-    """Return the extreme value, optionally shortcircuiting."""
-    extreme_item = None
-    extreme_value = initial
-    for item in seq:
-        value = value_func(item)
-        if value == shortcircuit_value:
-            try:
-                shortcircuit_callback()
-            except TypeError:
-                pass
-            return item
-        if cmp(value, extreme_value):
-            extreme_value = value
-            extreme_item = item
-    return extreme_item
-
-
-def expsublog(x, y):
-    """Computes ``x / y`` as ``exp(log(x) - log(y))``.
-
-    Useful for dividing by extremely large denominators.
-
-    See also ``numpy.logaddexp``.
+    The result is annotated with a `time` attribute.
     """
-    return math.exp(math.log(x) - math.log(y))
-
-
-def expaddlog(x, y):
-    """Computes ``x * y`` as ``exp(log(x) + log(y))``.
-
-    Useful for dividing by extremely large denominators.
-
-    See also ``numpy.logaddexp``.
-    """
-    return math.exp(math.log(x) + math.log(y))
-
-
-def _try_len(iterable):
-    try:
-        return len(iterable)
-    except TypeError:
-        return None
-
-
-def try_len(*iterables):
-    """Return the minimum length of iterables, or ``None`` if none have a length."""
-    lengths = (_try_len(it) for it in iterables)
-    return min((l for l in lengths if l is not None), default=None)
-
-
-def assume_integer(x):
-    """Attempt cast to integer, raising an error if it is not an integer."""
-    if isinstance(x, float) and not x.is_integer():
-        raise ValueError(f"expected integer, got {type(x)} {x}")
-    return int(x)
-
-
-def enforce_integer(i, name="", min=float("-inf")):
-    if not isinstance(i, int) or i < min:
-        raise ValueError(f"{name} must be a positive integer")
-    return i
-
-
-def enforce_integer_or_none(i, **kwargs):
-    if i is None:
-        return i
-    return enforce_integer(i, **kwargs)
-
-
-@curry
-def all_same(comparison, seq):
-    sentinel = object()
-    first = next(seq, sentinel)
-    if first is sentinel:
-        # Vacuously
-        return True
-    return all(comparison(first, other) for other in seq)
-
-
-# Compare equality up to precision
-all_are_equal = all_same(eq)
-all_are_identical = all_same(operator.is_)
-
-
-NO_DEFAULT = object()
-
-# TODO test
-@curry
-def all_extrema(comparison, seq, default=NO_DEFAULT):
-    """Return the extrema of ``seq``.
-
-    Use ``<`` as the comparison to obtain the minima; use ``>`` as the
-    comparison to obtain the maxima.
-
-    Uses only one pass through ``seq``.
-
-    Args:
-        comparison (callable): A comparison operator.
-        seq (iterator): An iterator over a sequence.
-
-    Returns:
-        list: The maxima/minima in ``seq``.
-    """
-    extrema = []
-    sentinel = object()
-    current_extremum = next(seq, sentinel)
-    if current_extremum is sentinel:
-        if default is NO_DEFAULT:
-            raise ValueError("Cannot find extrema of empty sequence without default")
-        else:
-            return [default]
-    extrema.append(current_extremum)
-    for element in seq:
-        if comparison(element, current_extremum):
-            extrema = [element]
-            current_extremum = element
-        elif element == current_extremum:
-            extrema.append(element)
-    return extrema
-
-
-all_minima = all_extrema(operator.lt)
-all_maxima = all_extrema(operator.gt)
-
-
-def iter_with_default(seq, default):
-    """Iterate over ``seq``, yielding ``default`` if ``seq`` is empty."""
-    yielded = False
-    for item in seq:
-        yield item
-        yielded = True
-    if not yielded:
-        if default is NO_DEFAULT:
-            raise ValueError("Cannot iterate over empty sequence without default")
-        yield default
+    start = time()
+    result = func(*args, **kwargs)
+    end = time()
+    result.time = round(end - start, config.PRECISION)
+    return result

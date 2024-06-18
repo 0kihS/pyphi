@@ -6,33 +6,41 @@
 Functions for generating partitions.
 """
 
-import functools
-import itertools
-from itertools import chain, product
+from itertools import chain, permutations, product
 
-import numpy as np
-from more_itertools import distinct_permutations
-from toolz import unique
-
-from . import combinatorics
+from . import config
 from .cache import cache
-from .conf import config, fallback
-from .direction import Direction
-from .models.cuts import (
-    Bipartition,
-    CompleteGeneralKCut,
-    CompleteGeneralSetPartition,
-    Cut,
-    GeneralKCut,
-    GeneralSetPartition,
-    KPartition,
-    Part,
-    SystemPartition,
-    Tripartition,
-)
+from .models import Bipartition, KPartition, Part, Tripartition
 from .registry import Registry
 
-# TODO(4.0) move purely combinatorial functions to `combinatorics`
+
+# From stackoverflow.com/questions/19368375/set-partitions-in-python
+def partitions(collection):
+    """Generate all set partitions of a collection.
+
+    Example:
+        >>> list(partitions(range(3)))  # doctest: +NORMALIZE_WHITESPACE
+        [[[0, 1, 2]],
+         [[0], [1, 2]],
+         [[0, 1], [2]],
+         [[1], [0, 2]],
+         [[0], [1], [2]]]
+    """
+    collection = list(collection)
+
+    # Special cases
+    if not collection:
+        return
+
+    if len(collection) == 1:
+        yield [collection]
+        return
+
+    first = collection[0]
+    for smaller in partitions(collection[1:]):
+        for n, subset in enumerate(smaller):
+            yield smaller[:n] + [[first] + subset] + smaller[n + 1 :]
+        yield [[first]] + smaller
 
 
 @cache(cache={}, maxmem=None)
@@ -65,7 +73,7 @@ def bipartition_indices(N):
 
 
 # TODO? rename to `bipartitions`
-def bipartition(seq, nontrivial=False):
+def bipartition(seq):
     """Return a list of bipartitions for a sequence.
 
     Args:
@@ -79,13 +87,10 @@ def bipartition(seq, nontrivial=False):
         >>> bipartition((1,2,3))
         [((), (1, 2, 3)), ((1,), (2, 3)), ((2,), (1, 3)), ((1, 2), (3,))]
     """
-    bipartitions = [
+    return [
         (tuple(seq[i] for i in part0_idx), tuple(seq[j] for j in part1_idx))
         for part0_idx, part1_idx in bipartition_indices(len(seq))
     ]
-    if nontrivial:
-        return bipartitions[1:]
-    return bipartitions
 
 
 @cache(cache={}, maxmem=None)
@@ -345,8 +350,6 @@ def k_partitions(collection, k):
         return []
     if k == 1:
         return [[collection]]
-    if k == n:
-        return [[[item] for item in collection]]
 
     a = [0] * (n + 1)
     for j in range(1, k + 1):
@@ -356,10 +359,6 @@ def k_partitions(collection, k):
 
 # Concrete partitions producing PyPhi models
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-# Distinction partitions
-# ~~~~~~~~~~~~~~~~~~~~~~
 
 
 class PartitionRegistry(Registry):
@@ -375,7 +374,7 @@ class PartitionRegistry(Registry):
     And use them by setting ``config.PARTITION_TYPE = 'NONE'``
     """
 
-    desc = "distinction partitions"
+    desc = "partitions"
 
 
 partition_types = PartitionRegistry()
@@ -442,9 +441,7 @@ def mip_bipartitions(mechanism, purview, node_labels=None):
     for n, d in product(numerators, denominators):
         if (n[0] or d[0]) and (n[1] or d[1]):
             yield Bipartition(
-                Part(n[0], d[0], node_labels=node_labels),
-                Part(n[1], d[1], node_labels=node_labels),
-                node_labels=node_labels,
+                Part(n[0], d[0]), Part(n[1], d[1]), node_labels=node_labels
             )
 
 
@@ -490,11 +487,8 @@ def wedge_partitions(mechanism, purview, node_labels=None):
     for n, d in filter(valid, product(numerators, denominators)):
         # Normalize order of parts to remove duplicates.
         tripart = Tripartition(
-            Part(n[0], d[0], node_labels=node_labels),
-            Part(n[1], d[1], node_labels=node_labels),
-            Part((), d[2], node_labels=node_labels),
-            node_labels=node_labels,
-        ).normalize()
+            Part(n[0], d[0]), Part(n[1], d[1]), Part((), d[2]), node_labels=node_labels
+        ).normalize()  # pylint: disable=bad-whitespace
 
         def nonempty(part):
             """Check that the part is not empty."""
@@ -537,227 +531,29 @@ def all_partitions(mechanism, purview, node_labels=None):
     Yields:
         KPartition: A partition of this mechanism and purview into ``k`` parts.
     """
-    # TODO(4.0): yield complete partition directly, then use nontrivial set partitions
-    for mechanism_partition in combinatorics.set_partitions(mechanism):
+    for mechanism_partition in partitions(mechanism):
         mechanism_partition.append([])
         n_mechanism_parts = len(mechanism_partition)
         max_purview_partition = min(len(purview), n_mechanism_parts)
         for n_purview_parts in range(1, max_purview_partition + 1):
             n_empty = n_mechanism_parts - n_purview_parts
             for purview_partition in k_partitions(purview, n_purview_parts):
-                purview_partition = [tuple(part) for part in purview_partition]
+                purview_partition = [tuple(_list) for _list in purview_partition]
                 # Extend with empty tuples so purview partition has same size
                 # as mechanism purview
                 purview_partition.extend([()] * n_empty)
-                # Unique permutations to avoid duplicate empties
-                for purview_permutation in distinct_permutations(purview_partition):
+
+                # Unique permutations to avoid duplicates empties
+                for purview_permutation in set(permutations(purview_partition)):
+
                     parts = [
-                        Part(tuple(m), tuple(p), node_labels=node_labels)
+                        Part(tuple(m), tuple(p))
                         for m, p in zip(mechanism_partition, purview_permutation)
                     ]
+
                     # Must partition the mechanism, unless the purview is fully
                     # cut away from the mechanism.
-                    # TODO(4.0) find a way to avoid generating these in the first place
                     if parts[0].mechanism == mechanism and parts[0].purview:
                         continue
+
                     yield KPartition(*parts, node_labels=node_labels)
-
-
-class CompletePartition(KPartition):
-    """Represents the partition that completely separates mechanism and purview."""
-
-
-def complete_partition(mechanism, purview):
-    n_parts = len(next(mip_partitions(mechanism, purview)))
-    parts = [Part((), ())] * (n_parts - 2) + [Part((), purview), Part(mechanism, ())]
-    return CompletePartition(*parts)
-
-
-class AtomicPartition(KPartition):
-    """Represents the partition that separates all inter-element connections."""
-
-
-def atomic_partition(elements):
-    return AtomicPartition(*[Part((elt,), (elt,)) for elt in elements])
-
-
-# System partitions
-# ~~~~~~~~~~~~~~~~~
-
-
-class SystemPartitionRegistry(Registry):
-    """Storage for system partition schemes registered with PyPhi.
-
-    Users can define custom partitions:
-
-    Examples:
-        >>> @system_partition_types.register('NONE')  # doctest: +SKIP
-        ... def no_partitions(mechanism, purview):
-        ...    return []
-
-    And use them by setting ``config.SYSTEM_PARTITION_TYPE = 'NONE'``
-    """
-
-    desc = "system partitions"
-
-
-system_partition_types = SystemPartitionRegistry()
-
-
-# TODO(4.0) consolidate Cut and SystemPartition logic
-
-
-def _bipartitions_to_cuts(func):
-    """Decorator to return equivalent Cut objects from a set of bipartitions."""
-
-    @functools.wraps(func)
-    def wrapper(*args, node_labels=None, **kwargs):
-        bipartitions = func(*args, **kwargs)
-        return [
-            Cut(bipartition[0], bipartition[1], node_labels=node_labels)
-            for bipartition in bipartitions
-        ]
-
-    return wrapper
-
-
-@system_partition_types.register("DIRECTED_BI")
-@_bipartitions_to_cuts
-def system_directed_bipartitions(nodes):
-    # Don't consider trivial partitions where one part is empty
-    return directed_bipartition(nodes, nontrivial=True)
-
-
-@system_partition_types.register("DIRECTED_BI_CUT_ONE")
-@_bipartitions_to_cuts
-def system_directed_bipartitions_cut_one(nodes):
-    return directed_bipartition_of_one(nodes)
-
-
-@system_partition_types.register("DIRECTED_BI_SIMPLE")
-def system_bipartitions_simple(nodes, node_labels=None):
-    # Use a list instead of generator for progress bar totals since it's linear
-    # in the size of the system
-    partitions = []
-    for n in range(1, len(nodes)):
-        part1, part2 = nodes[:n], nodes[n:]
-        partitions.append(
-            Cut(from_nodes=part1, to_nodes=part2, node_labels=node_labels)
-        )
-        partitions.append(
-            Cut(from_nodes=part2, to_nodes=part1, node_labels=node_labels)
-        )
-    return partitions
-
-
-def _bipartitions_to_temporal_system_partitions(func):
-    """Decorator to return temporally-directed SystemPartition objects from a
-    set of bipartitions.
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args, node_labels=None, **kwargs):
-        for bipartition in func(*args, **kwargs):
-            for direction in Direction.both():
-                yield SystemPartition(
-                    direction,
-                    bipartition[0],
-                    bipartition[1],
-                    node_labels=node_labels,
-                )
-
-    return wrapper
-
-
-@system_partition_types.register("TEMPORAL_DIRECTED_BI")
-@_bipartitions_to_temporal_system_partitions
-def system_temporal_directed_bipartitions(nodes):
-    # Don't consider trivial partitions where one part is empty
-    return directed_bipartition(nodes, nontrivial=True)
-
-
-@system_partition_types.register("TEMPORAL_DIRECTED_BI_CUT_ONE")
-@_bipartitions_to_temporal_system_partitions
-def system_temporal_directed_bipartitions_cut_one(nodes):
-    return directed_bipartition_of_one(nodes)
-
-
-def _cut_matrices(n, symmetric=False):
-    repeat = n**2 - n
-    if symmetric:
-        repeat = repeat // 2
-    mid = repeat // 2
-    # Skip first all-zero combination since they are all zeros
-    for combination in itertools.islice(product([0, 1], repeat=repeat), 1, None):
-        cm = np.zeros([n, n], dtype=int)
-        if symmetric:
-            triu = tril = combination
-        else:
-            triu = combination[:mid]
-            tril = combination[mid:]
-        cm[np.triu_indices(n, k=1)] = triu
-        cm[np.tril_indices(n, k=-1)] = tril
-        yield cm
-
-
-@system_partition_types.register("GENERAL")
-def general(node_indices, node_labels=None):
-    yield CompleteGeneralKCut(node_indices, node_labels=node_labels)
-    for cut_matrix in _cut_matrices(len(node_indices)):
-        yield GeneralKCut(node_indices, cut_matrix, node_labels=node_labels)
-
-
-def num_general_partitions(n):
-    return 2 ** (n**2 - n)
-
-
-@system_partition_types.register("GENERAL_BIDIRECTIONAL")
-def general_bidirectional(node_indices, node_labels=None):
-    yield CompleteGeneralKCut(node_indices, node_labels=node_labels)
-    for cut_matrix in _cut_matrices(len(node_indices), symmetric=True):
-        yield GeneralKCut(node_indices, cut_matrix, node_labels=node_labels)
-
-
-def _unidirectional_set_partitions(node_indices, node_labels=None):
-    """Generate all unidirectional set partitions of a set of nodes."""
-    if len(node_indices) == 1 or config.SYSTEM_PARTITION_INCLUDE_COMPLETE:
-        yield CompleteGeneralSetPartition(node_indices, node_labels=node_labels)
-    _node_indices = set(range(len(node_indices)))
-    for partition in combinatorics.set_partitions(_node_indices, nontrivial=True):
-        for directions in product(Direction.all(), repeat=len(partition)):
-            cut_matrix = np.zeros([len(_node_indices), len(_node_indices)], dtype=int)
-            for part, direction in zip(partition, directions):
-                nonpart = list(_node_indices - set(part))
-                if direction == Direction.CAUSE:
-                    source, target = nonpart, part
-                else:
-                    source, target = part, nonpart
-                cut_matrix[np.ix_(source, target)] = 1
-                if direction == Direction.BIDIRECTIONAL:
-                    cut_matrix[np.ix_(target, source)] = 1
-            yield GeneralSetPartition(
-                node_indices,
-                cut_matrix,
-                node_labels=node_labels,
-                set_partition=partition,
-            )
-
-
-@system_partition_types.register("SET_UNI/BI")
-@functools.wraps(_unidirectional_set_partitions)
-def unidirectional_set_partitions(node_indices, node_labels=None):
-    # TODO(4.0) generate properly without using set
-    yield from unique(
-        _unidirectional_set_partitions(node_indices, node_labels=node_labels)
-    )
-
-
-def system_partitions(nodes, node_labels=None, partition_scheme=None, filter_func=None):
-    """Return the currently configured system partitions for the given nodes."""
-    partition_scheme = fallback(partition_scheme, config.SYSTEM_PARTITION_TYPE)
-    partitions = system_partition_types[partition_scheme](
-        nodes, node_labels=node_labels
-    )
-    if filter_func is not None:
-        return filter(filter_func, partitions)
-    return partitions

@@ -6,13 +6,10 @@
 Helper class representing labels of network nodes.
 """
 
-from collections.abc import Sequence
+import collections
 
-import numpy as np
-
-from . import validate
-from .conf import config, fallback
-from .models import cmp
+from pyphi import validate
+from pyphi.models import cmp
 
 
 def default_label(index):
@@ -25,7 +22,7 @@ def default_labels(indices):
     return tuple(default_label(i) for i in indices)
 
 
-class NodeLabels(Sequence):
+class NodeLabels(collections.abc.Sequence):
     """Text labels for nodes in a network.
 
     Labels can either be instantiated as a tuple of strings:
@@ -74,12 +71,6 @@ class NodeLabels(Sequence):
     def __hash__(self):
         return hash((self.labels, self.node_indices))
 
-    def index2label(self, index):
-        return self._i2l[index]
-
-    def label2index(self, label):
-        return self._l2i[label]
-
     def labels2indices(self, labels):
         """Convert a tuple of node labels to node indices."""
         return tuple(self._l2i[label] for label in labels)
@@ -100,34 +91,6 @@ class NodeLabels(Sequence):
         else:
             indices = map(int, nodes)
         return tuple(sorted(set(indices)))
-
-    def coerce_to_labels(self, nodes):
-        """Return the nodes labels for nodes, where ``nodes`` is either
-        already labels or node indices.
-        """
-        if nodes is None:
-            return self.node_indices
-
-        if all(isinstance(node, (int, np.int64)) for node in nodes):
-            labels = self.indices2labels(nodes)
-        else:
-            labels = nodes
-        return tuple(labels)
-
-    def label_string(self, nodes, state, sep=None):
-        """Return a single string labeling the nodes."""
-        sep = fallback(
-            sep,
-            config.LABEL_SEPARATOR,
-        )
-        return sep.join(self.set_case_by_state(self.coerce_to_labels(nodes), state))
-
-    def set_case_by_state(self, labels, states):
-        """Return a list of labels with case set by the corresponding state."""
-        return [
-            label.upper() if state else label.lower()
-            for label, state in zip(labels, states, strict=True)
-        ]
 
     def to_json(self):
         return {"labels": self.labels, "node_indices": self.node_indices}

@@ -104,12 +104,13 @@ def purview_size(repertoire):
     return len(purview(repertoire))
 
 
-def repertoire_shape(all_node_indices, purview):  # pylint: disable=redefined-outer-name
+def repertoire_shape(purview, N):  # pylint: disable=redefined-outer-name
     """Return the shape a repertoire.
 
     Args:
-        all_node_indices (tuple[int]): The node indices of the network.
-        purview (tuple[int]): The indices of nodes in the repertoire.
+        purview (tuple[int]): The purview over which the repertoire is
+            computed.
+        N (int): The number of elements in the system.
 
     Returns:
         list[int]: The shape of the repertoire. Purview nodes have two
@@ -117,11 +118,12 @@ def repertoire_shape(all_node_indices, purview):  # pylint: disable=redefined-ou
 
     Example:
         >>> purview = (0, 2)
-        >>> repertoire_shape(range(3), purview)
+        >>> N = 3
+        >>> repertoire_shape(purview, N)
         [2, 1, 2]
     """
     # TODO: extend to non-binary nodes
-    return [2 if i in purview else 1 for i in all_node_indices]
+    return [2 if i in purview else 1 for i in range(N)]
 
 
 def flatten(repertoire, big_endian=False):
@@ -148,8 +150,30 @@ def flatten(repertoire, big_endian=False):
     return repertoire.squeeze().ravel(order=order)
 
 
+def unflatten(repertoire, purview, N, big_endian=False):
+    """Unflatten a repertoire.
+
+    By default, the input is assumed to be in little-endian order.
+
+    Args:
+        repertoire (np.ndarray or None): A probability distribution.
+        purview (Iterable[int]): The indices of the nodes whose states the
+            probability is distributed over.
+        N (int): The size of the network.
+
+    Keyword Args:
+        big_endian (boolean): If ``True``, assume the flat repertoire is in
+            big-endian order.
+
+    Returns:
+        np.ndarray: The unflattened repertoire.
+    """
+    order = "C" if big_endian else "F"
+    return repertoire.reshape(repertoire_shape(purview, N), order=order)
+
+
 @cache(cache={}, maxmem=None)
-def max_entropy_distribution(all_node_indices, purview):
+def max_entropy_distribution(node_indices, number_of_nodes):
     """Return the maximum entropy distribution over a set of nodes.
 
     This is different from the network's uniform distribution because nodes
@@ -157,11 +181,13 @@ def max_entropy_distribution(all_node_indices, purview):
     state.
 
     Args:
-        all_node_indices (tuple[int]): The node indices of the network.
-        purview (tuple[int]): The indices of nodes in the distribution.
+        node_indices (tuple[int]): The set of node indices over which to take
+            the distribution.
+        number_of_nodes (int): The total number of nodes in the network.
 
     Returns:
         np.ndarray: The maximum entropy distribution over the set of nodes.
     """
-    distribution = np.ones(repertoire_shape(all_node_indices, purview))
+    distribution = np.ones(repertoire_shape(node_indices, number_of_nodes))
+
     return distribution / distribution.size

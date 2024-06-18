@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # validate.py
 
 """
@@ -6,16 +8,10 @@ Methods for validating arguments.
 
 import numpy as np
 
-from . import exceptions
-from .conf import config
-from .direction import Direction
+from . import Direction, config, convert, exceptions
+from .tpm import is_state_by_state
 
 # pylint: disable=redefined-outer-name
-
-
-# TODO(4.0) move to `Direction`
-def directions(directions, **kwargs):
-    return all(direction(d, **kwargs) for d in directions)
 
 
 def direction(direction, allow_bi=False):
@@ -24,16 +20,80 @@ def direction(direction, allow_bi=False):
     If ``allow_bi`` is ``True`` then ``Direction.BIDIRECTIONAL`` is
     acceptable.
     """
-    valid = set(Direction.both())
+    valid = [Direction.CAUSE, Direction.EFFECT]
     if allow_bi:
-        valid.add(Direction.BIDIRECTIONAL)
+        valid.append(Direction.BIDIRECTIONAL)
 
     if direction not in valid:
-        raise ValueError(
-            f"`direction` must be one of `Direction.{valid}`; "
-            f"got {type(direction)} `{direction}`"
-        )
+        raise ValueError("`direction` must be one of {}".format(valid))
 
+    return True
+
+
+def tpm(tpm, check_independence=True):
+    """Validate a TPM.
+
+    The TPM can be in
+
+        * 2-dimensional state-by-state form,
+        * 2-dimensional state-by-node form, or
+        * multidimensional state-by-node form.
+    """
+    see_tpm_docs = (
+        "See the documentation on TPM conventions and the `pyphi.Network` "
+        "object for more information on TPM forms."
+    )
+    # Cast to np.array.
+    tpm = np.array(tpm)
+    # Get the number of nodes from the state-by-node TPM.
+    N = tpm.shape[-1]
+    if tpm.ndim == 2:
+        if not (
+            (tpm.shape[0] == 2 ** N and tpm.shape[1] == N)
+            or (tpm.shape[0] == tpm.shape[1])
+        ):
+            raise ValueError(
+                "Invalid shape for 2-D TPM: {}\nFor a state-by-node TPM, "
+                "there must be "
+                "2^N rows and N columns, where N is the "
+                "number of nodes. State-by-state TPM must be square. "
+                "{}".format(tpm.shape, see_tpm_docs)
+            )
+        if tpm.shape[0] == tpm.shape[1] and check_independence:
+            conditionally_independent(tpm)
+    elif tpm.ndim == (N + 1):
+        if tpm.shape != tuple([2] * N + [N]):
+            raise ValueError(
+                "Invalid shape for multidimensional state-by-node TPM: {}\n"
+                "The shape should be {} for {} nodes. {}".format(
+                    tpm.shape, ([2] * N) + [N], N, see_tpm_docs
+                )
+            )
+    else:
+        raise ValueError(
+            "Invalid TPM: Must be either 2-dimensional or multidimensional. "
+            "{}".format(see_tpm_docs)
+        )
+    return True
+
+
+def conditionally_independent(tpm):
+    """Validate that the TPM is conditionally independent."""
+    tpm = np.array(tpm)
+    if is_state_by_state(tpm):
+        there_and_back_again = convert.state_by_node2state_by_state(
+            convert.state_by_state2state_by_node(tpm)
+        )
+    else:
+        there_and_back_again = convert.state_by_state2state_by_node(
+            convert.state_by_node2state_by_state(tpm)
+        )
+    if not np.allclose((tpm - there_and_back_again), 0.0):
+        raise exceptions.ConditionallyDependentError(
+            "TPM is not conditionally independent.\n"
+            "See the conditional independence example in the documentation "
+            "for more info."
+        )
     return True
 
 
@@ -67,7 +127,7 @@ def network(n):
 
     Checks the TPM and connectivity matrix.
     """
-    n.tpm.validate()
+    tpm(n.tpm)
     connectivity_matrix(n.cm)
     if n.cm.shape[0] != n.size:
         raise ValueError(
@@ -111,7 +171,7 @@ def state_reachable(subsystem):
     # reached from some state.
     # First we take the submatrix of the conditioned TPM that corresponds to
     # the nodes that are actually in the subsystem...
-    tpm = subsystem.effect_tpm.tpm[..., subsystem.node_indices]
+    tpm = subsystem.tpm[..., subsystem.node_indices]
     # Then we do the subtraction and test.
     test = tpm - np.array(subsystem.proper_state)
     if not np.any(np.logical_and(-1 < test, test < 1).all(-1)):
@@ -120,7 +180,7 @@ def state_reachable(subsystem):
 
 def cut(cut, node_indices):
     """Check that the cut is for only the given nodes."""
-    if set(cut.indices) != set(node_indices):
+    if cut.indices != node_indices:
         raise ValueError(
             "{} nodes are not equal to subsystem nodes " "{}".format(cut, node_indices)
         )
@@ -132,7 +192,7 @@ def subsystem(s):
     Checks its state and cut.
     """
     node_states(s.state)
-    # cut(s.cut, s.cut_indices)
+    cut(s.cut, s.cut_indices)
     if config.VALIDATE_SUBSYSTEM_STATES:
         state_reachable(s)
     return True
@@ -218,4 +278,4 @@ def blackbox_and_coarse_grain(blackbox, coarse_grain):
 def relata(relata):
     """Validate a set of relata."""
     if not relata:
-        raise ValueError("relata cannot be empty")
+        raise ValueError("Relata cannot be empty.")

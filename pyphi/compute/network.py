@@ -8,8 +8,7 @@ Functions for computing network-level properties.
 
 import logging
 
-from .. import conf, exceptions, utils, validate
-from ..conf import config
+from .. import config, exceptions, utils, validate
 from ..models import _null_sia
 from ..subsystem import Subsystem
 from .parallel import MapReduce
@@ -19,7 +18,7 @@ from .subsystem import sia
 log = logging.getLogger(__name__)
 
 
-def reachable_subsystems(network, indices, state, **kwargs):
+def _reachable_subsystems(network, indices, state):
     """A generator over all subsystems in a valid state."""
     validate.is_network(network)
 
@@ -27,12 +26,12 @@ def reachable_subsystems(network, indices, state, **kwargs):
     # resource usage.
     for subset in utils.powerset(indices, nonempty=True, reverse=True):
         try:
-            yield Subsystem(network, state, subset, **kwargs)
+            yield Subsystem(network, state, subset)
         except exceptions.StateUnreachableError:
             pass
 
 
-def subsystems(network, state, **kwargs):
+def subsystems(network, state):
     """Return a generator of all **possible** subsystems of a network.
 
     .. note::
@@ -47,10 +46,10 @@ def subsystems(network, state, **kwargs):
         Subsystem: A |Subsystem| for each subset of nodes in the network,
         excluding subsystems that would be in an impossible state.
     """
-    return reachable_subsystems(network, network.node_indices, state, **kwargs)
+    return _reachable_subsystems(network, network.node_indices, state)
 
 
-def possible_complexes(network, state, **kwargs):
+def possible_complexes(network, state):
     """Return a generator of subsystems of a network that could be a complex.
 
     This is the just powerset of the nodes that have at least one input and
@@ -69,12 +68,29 @@ def possible_complexes(network, state, **kwargs):
     Yields:
         Subsystem: The next subsystem that could be a complex.
     """
-    return reachable_subsystems(
-        network, network.causally_significant_nodes, state, **kwargs
-    )
+    return _reachable_subsystems(network, network.causally_significant_nodes, state)
 
 
-def all_complexes(network, state, parallel_kwargs=None, **kwargs):
+class FindAllComplexes(MapReduce):
+    """Computation engine for finding all complexes."""
+
+    # pylint: disable=unused-argument,arguments-differ
+
+    description = "Finding complexes"
+
+    def empty_result(self):
+        return []
+
+    @staticmethod
+    def compute(subsystem):
+        return sia(subsystem)
+
+    def process_result(self, new_sia, sias):
+        sias.append(new_sia)
+        return sias
+
+
+def all_complexes(network, state):
     """Return a generator for all complexes of the network.
 
     .. note::
@@ -89,20 +105,20 @@ def all_complexes(network, state, parallel_kwargs=None, **kwargs):
         SystemIrreducibilityAnalysis: A |SIA| for each |Subsystem| of the
         |Network|.
     """
-    parallel_kwargs = conf.parallel_kwargs(
-        config.PARALLEL_COMPLEX_EVALUATION, **(parallel_kwargs or dict())
-    )
-    return MapReduce(
-        sia,
-        possible_complexes(network, state, **kwargs),
-        total=2 ** len(network) - 1,
-        map_kwargs=dict(progress=False),
-        desc="Evaluating complexes",
-        **parallel_kwargs,
-    ).run()
+    engine = FindAllComplexes(subsystems(network, state))
+    return engine.run(config.PARALLEL_COMPLEX_EVALUATION)
 
 
-def complexes(network, state, **kwargs):
+class FindIrreducibleComplexes(FindAllComplexes):
+    """Computation engine for finding irreducible complexes of a network."""
+
+    def process_result(self, new_sia, sias):
+        if new_sia.phi > 0:
+            sias.append(new_sia)
+        return sias
+
+
+def complexes(network, state):
     """Return all irreducible complexes of the network.
 
     Args:
@@ -113,10 +129,11 @@ def complexes(network, state, **kwargs):
         SystemIrreducibilityAnalysis: A |SIA| for each |Subsystem| of the
         |Network|, excluding those with |big_phi = 0|.
     """
-    return list(filter(None, all_complexes(network, state, **kwargs)))
+    engine = FindIrreducibleComplexes(possible_complexes(network, state))
+    return engine.run(config.PARALLEL_COMPLEX_EVALUATION)
 
 
-def major_complex(network, state, **kwargs):
+def major_complex(network, state):
     """Return the major complex of the network.
 
     Args:
@@ -128,24 +145,20 @@ def major_complex(network, state, **kwargs):
         maximal |big_phi|.
     """
     log.info("Calculating major complex...")
-    empty_subsystem = Subsystem(network, state, ())
-    default = _null_sia(empty_subsystem)
-    parallel_kwargs = conf.parallel_kwargs(config.PARALLEL_COMPLEX_EVALUATION, **kwargs)
-    result = MapReduce(
-        sia,
-        possible_complexes(network, state),
-        map_kwargs=dict(progress=False),
-        reduce_func=max,
-        reduce_kwargs=dict(default=default),
-        total=2 ** len(network) - 1,
-        desc="Evaluating complexes",
-        **parallel_kwargs,
-    ).run()
+
+    result = complexes(network, state)
+    if result:
+        result = max(result)
+    else:
+        empty_subsystem = Subsystem(network, state, ())
+        result = _null_sia(empty_subsystem)
+
     log.info("Finished calculating major complex.")
+
     return result
 
 
-def condensed(network, state, **kwargs):
+def condensed(network, state):
     """Return a list of maximal non-overlapping complexes.
 
     Args:
@@ -159,7 +172,7 @@ def condensed(network, state, **kwargs):
     result = []
     covered_nodes = set()
 
-    for c in reversed(sorted(complexes(network, state, **kwargs))):
+    for c in reversed(sorted(complexes(network, state))):
         if not any(n in covered_nodes for n in c.subsystem.node_indices):
             result.append(c)
             covered_nodes = covered_nodes | set(c.subsystem.node_indices)

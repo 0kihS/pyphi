@@ -9,7 +9,10 @@ See |compute.subsystem|, |compute.network|, |compute.distance|, and
 Attributes:
     all_complexes: Alias for :func:`pyphi.compute.network.all_complexes`.
     ces: Alias for :func:`pyphi.compute.subsystem.ces`.
+    ces_distance: Alias for :func:`pyphi.compute.distance.ces_distance`.
     complexes: Alias for :func:`pyphi.compute.network.complexes`.
+    concept_distance: Alias for
+        :func:`pyphi.compute.distance.concept_distance`.
     conceptual_info: Alias for :func:`pyphi.compute.subsystem.conceptual_info`.
     condensed: Alias for :func:`pyphi.compute.network.condensed`.
     evaluate_cut: Alias for :func:`pyphi.compute.subsystem.evaluate_cut`.
@@ -23,6 +26,7 @@ Attributes:
 
 # pylint: disable=unused-import
 
+from .distance import ces_distance, concept_distance
 from .network import (
     all_complexes,
     complexes,

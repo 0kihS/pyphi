@@ -1,24 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # compute/parallel.py
+
 
 """
 Utilities for parallel computation.
 """
 
-import functools
 import logging
 import multiprocessing
-from itertools import cycle
-from textwrap import indent
-from typing import Any, Callable, Iterable, List, Optional
+import sys
+import threading
+from itertools import chain, islice
 
-import ray
-from more_itertools import chunked_even, flatten
-from tqdm.auto import tqdm
+from tblib import Traceback
+from tqdm import tqdm
 
-from ..conf import config, fallback
-from ..utils import try_len
-from .progress import ProgressBar, throttled_update, wait_then_finish
-from .tree import get_constraints
+from .. import config
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +39,7 @@ def get_num_processes():
         if num <= 0:
             raise ValueError(
                 "Invalid NUMBER_OF_CORES; negative value is too negative: "
-                f"requesting {num} cores, {cpu_count} available."
+                "requesting {} cores, {} available.".format(num, cpu_count)
             )
 
         return num
@@ -49,382 +47,328 @@ def get_num_processes():
     return config.NUMBER_OF_CORES
 
 
-RAY_CLIENT = None
+class ExceptionWrapper:
+    """A picklable wrapper suitable for passing exception tracebacks through
+    instances of ``multiprocessing.Queue``.
 
-
-def init(*args, **kwargs):
-    """Initialize Ray if not already initialized."""
-    global RAY_CLIENT
-    if not ray.is_initialized():
-        RAY_CLIENT = ray.init(*args, **{**config.RAY_CONFIG, **kwargs})
-        return RAY_CLIENT
-
-
-def false(*args, **kwargs):
-    return False
-
-
-def shortcircuit(
-    items,
-    shortcircuit_func=false,
-    shortcircuit_callback=None,
-    shortcircuit_callback_args=None,
-):
-    """Yield from an iterable, stopping early if a certain value is found."""
-    for result in items:
-        yield result
-        if shortcircuit_func(result):
-            if shortcircuit_callback is not None:
-                shortcircuit_callback(fallback(shortcircuit_callback_args, items))
-            return
-
-
-def as_completed(object_refs: List[ray.ObjectRef], num_returns: int = 1):
-    """Yield remote results in order of completion."""
-    unfinished = object_refs
-    while unfinished:
-        finished, unfinished = ray.wait(unfinished, num_returns=num_returns)
-        yield from ray.get(finished)
-
-
-@functools.wraps(ray.cancel)
-def cancel_all(object_refs: Iterable, *args, **kwargs):
-    try:
-        for ref in object_refs:
-            ray.cancel(ref, *args, **kwargs)
-        # TODO remove the following when ray.cancel is less noisy; see
-        # https://github.com/ray-project/ray/issues/24658
-        object_refs, _ = ray.wait(object_refs, num_returns=len(object_refs))
-        for ref in object_refs:
-            try:
-                ray.get(ref)
-            except (ray.exceptions.RayTaskError, ray.exceptions.TaskCancelledError):
-                pass
-    except TypeError:
-        # Do nothing if the object_refs are not actually ObjectRefs
-        pass
-    return object_refs
-
-
-def get(
-    items,
-    remote=False,
-    ordered=False,
-    shortcircuit_func=false,
-    shortcircuit_callback=None,
-    shortcircuit_callback_args=None,
-):
-    """Get (potentially) remote results.
-
-    Optionally return early if a particular value is found.
-
-    NOTE: If `ordered` is True, all items will be computed regardless of
-    shortcircuiting, though the shortcircuiting logic will still be applied.
+    Args:
+        exception (Exception): The exception to wrap.
     """
-    shortcircuit_callback_args = fallback(shortcircuit_callback_args, items)
-    if remote:
-        if not ordered:
-            items = as_completed(items)
-        else:
-            items = ray.get(items)
-    return shortcircuit(
-        items,
-        shortcircuit_func=shortcircuit_func,
-        shortcircuit_callback=shortcircuit_callback,
-        shortcircuit_callback_args=shortcircuit_callback_args,
-    )
+
+    def __init__(self, exception):  # coverage: disable
+        self.exception = exception
+        _, _, tb = sys.exc_info()
+        self.tb = Traceback(tb)
+
+    def reraise(self):
+        """Re-raise the exception."""
+        raise self.exception.with_traceback(self.tb.as_traceback())
 
 
-def backpressure(func, *argslist, inflight_limit=1000, **kwargs):
-    # https://docs.ray.io/en/latest/ray-core/tasks/patterns/limit-tasks.html
-    result_refs = []
-    for i, args in enumerate(zip(*argslist)):
-        if len(result_refs) > inflight_limit:
-            num_ready = i - inflight_limit
-            ray.wait(result_refs, num_returns=num_ready)
-        result_refs.append(func.remote(*args, **kwargs))
-    return result_refs
-
-
-def _flatten(items, branch=False):
-    if branch:
-        items = flatten(items)
-    return list(items)
-
-
-def _map_sequential(func, *arglists, **kwargs):
-    for args in zip(*arglists):
-        yield func(*args, **kwargs)
-
-
-def _reduce(results, reduce_func, reduce_kwargs, branch):
-    if reduce_func is _flatten:
-        return reduce_func(results, branch=branch)
-    return reduce_func(results, **reduce_kwargs)
-
-
-def _map_reduce_tree(
-    iterables,
-    map_func,
-    reduce_func,
-    constraints,
-    tree,
-    chunksize,
-    shortcircuit_func,
-    shortcircuit_callback,
-    shortcircuit_callback_args,
-    ordered,
-    inflight_limit,
-    map_kwargs,
-    reduce_kwargs,
-    progress_bar,
-    _level=1,
-):
-    """Recursive map-reduce using a tree structure.
-
-    Useful when the reduction function is expensive or when reducing in one
-    chunk is otherwise problematic.
-    """
-    total = fallback(try_len(*iterables), float("inf"))
-    branch = _level < tree.depth and constraints.sequential_threshold < total
-    if branch:
-        chunksize = max(chunksize, constraints.sequential_threshold)
-        chunked_iterables = zip(
-            *(chunked_even(iterable, chunksize) for iterable in iterables)
-        )
-        # Reduce chunksize by branch factor, down to sequential threshold
-        chunksize = chunksize // constraints.branch_factor
-        # Submit tasks with backpressure
-        results = backpressure(
-            _remote_map_reduce_tree,
-            chunked_iterables,
-            cycle([map_func]),
-            cycle([reduce_func]),
-            cycle([constraints]),
-            cycle([tree]),
-            cycle([chunksize]),
-            cycle([shortcircuit_func]),
-            cycle([shortcircuit_callback]),
-            cycle([shortcircuit_callback_args]),
-            cycle([ordered]),
-            cycle([inflight_limit]),
-            cycle([map_kwargs]),
-            cycle([reduce_kwargs]),
-            cycle([progress_bar]),
-            inflight_limit=inflight_limit,
-            _level=_level + 1,
-        )
-    else:
-        results = _map_sequential(
-            map_func,
-            *iterables,
-            **map_kwargs,
-        )
-    if progress_bar and _level == 1:
-        # We're on root node: block on the progress bar before blocking on
-        # results.
-        wait_then_finish.remote(progress_bar, results)
-        progress_bar.print_until_done()
-    # Get (potentially remote) results.
-    results = get(
-        results,
-        remote=branch,
-        ordered=ordered,
-        shortcircuit_func=shortcircuit_func,
-        shortcircuit_callback=shortcircuit_callback,
-        shortcircuit_callback_args=shortcircuit_callback_args,
-    )
-    if progress_bar and _level > 1:
-        # We're on a child node: update the progress bar.
-        results = throttled_update(progress_bar, results)
-    return _reduce(results, reduce_func, reduce_kwargs, branch)
-
-
-_remote_map_reduce_tree = ray.remote(_map_reduce_tree)
-
-
-def progress_hook(progress_bar):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            progress_bar.actor.finish.remote(interrupted=True)
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+POISON_PILL = None
+Q_MAX_SIZE = multiprocessing.synchronize.SEM_VALUE_MAX
 
 
 class MapReduce:
-    """Map-reduce engine.
+    """An engine for doing heavy computations over an iterable.
 
-    Parallelized using Ray remote functions.
+    This is similar to ``multiprocessing.Pool``, but allows computations to
+    shortcircuit, and supports both parallel and sequential computations.
+
+    Args:
+        iterable (Iterable): A collection of objects to perform a computation
+            over.
+        *context: Any additional data necessary to complete the computation.
+
+    Any subclass of ``MapReduce`` must implement three methods::
+
+        - ``empty_result``,
+        - ``compute``, (map), and
+        - ``process_result`` (reduce).
+
+    The engine includes a builtin ``tqdm`` progress bar; this can be disabled
+    by setting ``pyphi.config.PROGRESS_BARS`` to ``False``.
+
+    Parallel operations start a daemon thread which handles log messages sent
+    from worker processes.
+
+    Subprocesses spawned by ``MapReduce`` cannot spawn more subprocesses; be
+    aware of this when composing nested computations. This is not an issue in
+    practice because it is typically most efficient to only parallelize the top
+    level computation.
     """
 
-    def __init__(
-        self,
-        map_func: Callable,
-        iterable: Iterable,
-        *iterables,
-        reduce_func: Optional[Callable] = None,
-        reduce_kwargs: Optional[dict] = None,
-        parallel: bool = True,
-        ordered: bool = False,
-        total: Optional[int] = None,
-        chunksize: Optional[int] = None,
-        sequential_threshold: int = 1,
-        max_depth: Optional[int] = None,
-        max_size: Optional[int] = None,
-        max_leaves: Optional[int] = None,
-        branch_factor: int = 2,
-        shortcircuit_func: Callable = false,
-        shortcircuit_callback: Optional[Callable] = None,
-        shortcircuit_callback_args: Any = None,
-        inflight_limit: int = 1000,
-        progress: Optional[bool] = None,
-        desc: Optional[str] = None,
-        map_kwargs: Optional[dict] = None,
-    ):
-        """
-        Specifying tree size: order of precedence:
-            chunksize, max_depth, max_size, max_leaves
-        """
-        self.map_func = map_func
-        self.iterables = (iterable,) + iterables
-        self.reduce_func = fallback(reduce_func, _flatten)
-        self.reduce_kwargs = fallback(reduce_kwargs, dict())
-        self.parallel = parallel
-        self.ordered = ordered
-        self.total = fallback(try_len(*self.iterables), total)
-        self.shortcircuit_func = shortcircuit_func
-        self.shortcircuit_callback = shortcircuit_callback
-        self.shortcircuit_callback_args = shortcircuit_callback_args
-        self.inflight_limit = inflight_limit
-        self.progress = fallback(progress, config.PROGRESS_BARS)
-        self.desc = desc
-        self.map_kwargs = fallback(map_kwargs, dict())
-        self._shortcircuit_callback = shortcircuit_callback
+    # Description for the tqdm progress bar
+    description = ""
 
-        if self.parallel:
-            self.constraints = get_constraints(
-                total=self.total,
-                chunksize=chunksize,
-                sequential_threshold=sequential_threshold,
-                max_depth=max_depth,
-                max_size=max_size,
-                max_leaves=max_leaves,
-                branch_factor=branch_factor,
-            )
-            # Get the tree specifications
-            self.tree = self.constraints.simulate()
-            # Get the chunksize
-            self.chunksize = self.constraints.get_initial_chunksize()
-            # Default to cancelling all remote tasks
-            if self.shortcircuit_callback is None:
-                self.shortcircuit_callback = cancel_all
-
-        self.progress_bar = None
-        # Store errors
-        self.error = None
-        # Flag indicating whether computation is finished
+    def __init__(self, iterable, *context):
+        self.iterable = iterable
+        self.context = context
         self.done = False
-        # Finished result
-        self.result = None
+        self.progress = self.init_progress_bar()
 
-    def _repr_attrs(self):
-        attrs = [
-            "map_func",
-            "map_kwargs",
-            "iterables",
-            "reduce_func",
-            "reduce_kwargs",
-            "parallel",
-            "ordered",
-            "total",
-            "shortcircuit_func",
-            "shortcircuit_callback",
-            "shortcircuit_callback_args",
-            "inflight_limit",
-            "progress",
-            "desc",
-        ]
-        if self.parallel:
-            attrs += ["constraints", "tree"]
-        return attrs
+        # Attributes used by parallel computations
+        self.task_queue = None
+        self.result_queue = None
+        self.log_queue = None
+        self.log_thread = None
+        self.processes = None
+        self.num_processes = None
+        self.tasks = None
+        self.complete = None
 
-    def __repr__(self):
-        data = [f"{attr}={getattr(self, attr)}" for attr in self._repr_attrs()]
-        return "\n".join(
-            [f"{self.__class__.__name__}(", indent("\n".join(data), "  "), ")"]
-        )
+    def empty_result(self, *context):
+        """Return the default result with which to begin the computation."""
+        raise NotImplementedError
 
-    def _run_parallel(self):
-        """Perform the computation in parallel."""
-        # Ensure ray is initialized with args from config
-        init()
-        if self.progress:
-            # Set up remote progress bar actor
-            self.progress_bar = ProgressBar(self.total, desc=self.desc)
-            # Insert a hook into the shortcircuit callback to finish the
-            # progress bar
-            self.shortcircuit_callback = progress_hook(self.progress_bar)(
-                self.shortcircuit_callback
-            )
+    @staticmethod
+    def compute(obj, *context):
+        """Map over a single object from ``self.iterable``."""
+        raise NotImplementedError
+
+    def process_result(self, new_result, old_result):
+        """Reduce handler.
+
+        Every time a new result is generated by ``compute``, this method is
+        called with the result and the previous (accumulated) result. This
+        method compares or collates these two values, returning the new result.
+
+        Setting ``self.done`` to ``True`` in this method will abort the
+        remainder of the computation, returning this final result.
+        """
+        raise NotImplementedError
+
+    #: Is this process a subprocess in a parallel computation?
+    _forked = False
+
+    # TODO: pass size of iterable alongside?
+    def init_progress_bar(self):
+        """Initialize and return a progress bar."""
+        # Forked worker processes can't show progress bars.
+        disable = MapReduce._forked or not config.PROGRESS_BARS
+
+        # Don't materialize iterable unless we have to: huge iterables
+        # (e.g. of `KCuts`) eat memory.
+        if disable:
+            total = None
+        else:
+            self.iterable = list(self.iterable)
+            total = len(self.iterable)
+
+        return tqdm(total=total, disable=disable, leave=False, desc=self.description)
+
+    @staticmethod  # coverage: disable
+    def worker(
+        compute,
+        task_queue,
+        result_queue,
+        log_queue,
+        complete,
+        parent_config,
+        *context,
+    ):
+        """A worker process, run by ``multiprocessing.Process``."""
         try:
-            self.result = _map_reduce_tree(
-                self.iterables,
-                self.map_func,
-                self.reduce_func,
-                self.constraints,
-                self.tree,
-                self.chunksize,
-                self.shortcircuit_func,
-                self.shortcircuit_callback,
-                self.shortcircuit_callback_args,
-                self.ordered,
-                self.inflight_limit,
-                self.map_kwargs,
-                self.reduce_kwargs,
-                self.progress_bar,
-            )
-            self.done = True
-            return self.result
+            MapReduce._forked = True
+            log.debug("Worker process starting...")
+
+            configure_worker_logging(log_queue)
+
+            for obj in iter(task_queue.get, POISON_PILL):
+                if complete.is_set():
+                    log.debug("Worker received signal - exiting early")
+                    break
+
+                log.debug("Worker got %s", obj)
+                config.load_dict(dict(parent_config))
+                result_queue.put(compute(obj, *context))
+                log.debug("Worker finished %s", obj)
+
+            result_queue.put(POISON_PILL)
+            log.debug("Worker process exiting")
+
+        except Exception as e:  # pylint: disable=broad-except
+            result_queue.put(ExceptionWrapper(e))
+
+    def start_parallel(self):
+        """Initialize all queues and start the worker processes and the log
+        thread.
+        """
+        self.num_processes = get_num_processes()
+
+        self.task_queue = multiprocessing.Queue(maxsize=Q_MAX_SIZE)
+        self.result_queue = multiprocessing.Queue()
+        self.log_queue = multiprocessing.Queue()
+
+        # Used to signal worker processes when a result is found that allows
+        # the computation to terminate early.
+        self.complete = multiprocessing.Event()
+
+        args = (
+            self.compute,
+            self.task_queue,
+            self.result_queue,
+            self.log_queue,
+            self.complete,
+            config,
+        ) + self.context
+        self.processes = [
+            multiprocessing.Process(target=self.worker, args=args, daemon=True)
+            for i in range(self.num_processes)
+        ]
+
+        for process in self.processes:
+            process.start()
+
+        self.log_thread = LogThread(self.log_queue)
+        self.log_thread.start()
+
+        self.initialize_tasks()
+
+    def initialize_tasks(self):
+        """Load the input queue to capacity.
+
+        Overfilling causes a deadlock when `queue.put` blocks when
+        full, so further tasks are enqueued as results are returned.
+        """
+        # Add a poison pill to shutdown each process.
+        self.tasks = chain(self.iterable, [POISON_PILL] * self.num_processes)
+        for task in islice(self.tasks, Q_MAX_SIZE):
+            log.debug("Putting %s on queue", task)
+            self.task_queue.put(task)
+
+    def maybe_put_task(self):
+        """Enqueue the next task, if there are any waiting."""
+        try:
+            task = next(self.tasks)
+        except StopIteration:
+            pass
+        else:
+            log.debug("Putting %s on queue", task)
+            self.task_queue.put(task)
+
+    def run_parallel(self):
+        """Perform the computation in parallel, reading results from the output
+        queue and passing them to ``process_result``.
+        """
+        try:
+            self.start_parallel()
+
+            result = self.empty_result(*self.context)
+
+            while self.num_processes > 0:
+                r = self.result_queue.get()
+                self.maybe_put_task()
+
+                if r is POISON_PILL:
+                    self.num_processes -= 1
+
+                elif isinstance(r, ExceptionWrapper):
+                    r.reraise()
+
+                else:
+                    result = self.process_result(r, result)
+                    self.progress.update(1)
+
+                    # Did `process_result` decide to terminate early?
+                    if self.done:
+                        self.complete.set()
+
+            self.finish_parallel()
+        except Exception:
+            raise
+        finally:
+            log.debug("Removing progress bar")
+            self.progress.close()
+
+        return result
+
+    def finish_parallel(self):
+        """Orderly shutdown of workers."""
+        for process in self.processes:
+            process.join()
+
+        # Shutdown the log thread
+        log.debug("Joining log thread")
+        self.log_queue.put(POISON_PILL)
+        self.log_thread.join()
+        self.log_queue.close()
+
+        # Close all queues
+        log.debug("Closing queues")
+        self.task_queue.close()
+        self.result_queue.close()
+
+    def run_sequential(self):
+        """Perform the computation sequentially, only holding two computed
+        objects in memory at a time.
+        """
+        try:
+            result = self.empty_result(*self.context)
+
+            for obj in self.iterable:
+                r = self.compute(obj, *self.context)
+                result = self.process_result(r, result)
+                self.progress.update(1)
+
+                # Short-circuited?
+                if self.done:
+                    break
         except Exception as e:
-            self.error = e
             raise e
         finally:
-            # Clean up progress bar actor
-            # TODO this should be 'exit_actor', but the method doesn't seem to
-            # have been injected
-            if self.progress:
-                self.progress_bar.actor.__ray_terminate__.remote()
+            self.progress.close()
 
-    def _run_sequential(self):
-        """Perform the computation serially."""
-        try:
-            results = _map_sequential(self.map_func, *self.iterables, **self.map_kwargs)
-            if self.progress:
-                results = tqdm(results, total=self.total, desc=self.desc)
-            results = get(
-                results,
-                remote=False,
-                shortcircuit_func=self.shortcircuit_func,
-                shortcircuit_callback=self.shortcircuit_callback,
-                shortcircuit_callback_args=self.shortcircuit_callback_args,
-            )
-            self.result = _reduce(
-                results, self.reduce_func, self.reduce_kwargs, branch=False
-            )
-            self.done = True
-            return self.result
-        except Exception as e:
-            self.error = e
-            raise e
+        return result
+
+    def run(self, parallel=True):
+        """Perform the computation.
+
+        Keyword Args:
+            parallel (boolean): If True, run the computation in parallel.
+                Otherwise, operate sequentially.
+        """
+        if parallel:
+            return self.run_parallel()
+        return self.run_sequential()
+
+
+# TODO: maintain a single log thread?
+class LogThread(threading.Thread):
+    """Thread which handles log records sent from ``MapReduce`` processes.
+
+    It listens to an instance of ``multiprocessing.Queue``, rewriting log
+    messages to the PyPhi log handler.
+    """
+
+    def __init__(self, q):
+        self.q = q
+        super().__init__()
+        self.daemon = True
 
     def run(self):
-        """Perform the computation."""
-        if self.done:
-            return self.result
-        if self.parallel and self.tree.depth > 1:
-            return self._run_parallel()
-        return self._run_sequential()
+        log.debug("Log thread started")
+        while True:
+            record = self.q.get()
+            if record is POISON_PILL:
+                break
+            logger = logging.getLogger(record.name)
+            logger.handle(record)
+        log.debug("Log thread exiting")
+
+
+def configure_worker_logging(queue):  # coverage: disable
+    """Configure a worker process to log all messages to ``queue``."""
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "handlers": {
+                "queue": {
+                    "class": "logging.handlers.QueueHandler",
+                    "queue": queue,
+                },
+            },
+            "root": {"level": "DEBUG", "handlers": ["queue"]},
+        }
+    )

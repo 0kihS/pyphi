@@ -10,62 +10,45 @@ Example networks and subsystems to go along with the documentation.
 # flake8: noqa
 
 import string
-from collections import defaultdict
 
 import numpy as np
 
-from . import actual
 from .actual import Transition
-from .conf import config
 from .network import Network
 from .subsystem import Subsystem
 from .utils import all_states, powerset
+from . import actual, config
 
 LABELS = string.ascii_uppercase
 
-EXAMPLES = defaultdict(dict)
 
-def register_example(func):
-    name = func.__name__.split('_')
-    obj = name[-1]
-    name = '_'.join(name[:-1])
-    EXAMPLES[obj][name] = func
-    return func
-
-
-@register_example
-def grid3_network():
-    """3-node grid network."""
-    # Grid
+# TODO(relations): add docstring
+def PQR_network():
     # fmt: off
     tpm = np.array([
-       [[[0.04742587, 0.02931223, 0.04742587],
-         [0.04742587, 0.07585818, 0.88079708]],
-
-        [[0.11920292, 0.81757448, 0.11920292],
-         [0.11920292, 0.92414182, 0.95257413]]],
-
-
-       [[[0.88079708, 0.07585818, 0.04742587],
-         [0.88079708, 0.18242552, 0.88079708]],
-
-        [[0.95257413, 0.92414182, 0.11920292],
-         [0.95257413, 0.97068777, 0.95257413]]]
-    ])
-    cm = np.array([
+        [0, 0, 0],
+        [0, 0, 1],
+        [1, 0, 1],
+        [1, 0, 0],
         [1, 1, 0],
         [1, 1, 1],
-        [0, 1, 1],
+        [1, 1, 1],
+        [1, 1, 0],
+    ])
+    cm = np.array([
+        [0, 0, 1],
+        [1, 0, 1],
+        [1, 1, 0],
     ])
     # fmt: on
-    return Network(tpm, cm=cm, node_labels=['A', 'B', 'C'])
-
-@register_example
-def grid3_subsystem():
-    return Subsystem(grid3_network(), state=(0, 0, 0), nodes=(0, 1, 2))
+    return Network(tpm, cm=cm, node_labels=['P', 'Q', 'R'])
 
 
-@register_example
+# TODO(relations): add docstring
+def PQR():
+    return Subsystem(PQR_network(), (1, 0, 0))
+
+
 def basic_network(cm=False):
     """A 3-node network of logic gates.
 
@@ -151,7 +134,6 @@ def basic_state():
     return (1, 0, 0)
 
 
-@register_example
 def basic_subsystem():
     """A subsystem containing all the nodes of the
     :func:`~pyphi.examples.basic_network`.
@@ -161,12 +143,6 @@ def basic_subsystem():
     return Subsystem(net, state)
 
 
-# TODO(relations): add docstring
-pqr_network = basic_network
-pqr_subsystem = basic_subsystem
-
-
-@register_example
 def basic_noisy_selfloop_network():
     """Based on the basic_network, but with added selfloops and noisy edges.
 
@@ -212,7 +188,6 @@ def basic_noisy_selfloop_network():
     return Network(tpm, cm=cm)
 
 
-@register_example
 def basic_noisy_selfloop_subsystem():
     """A subsystem containing all the nodes of the
     :func:`~pyphi.examples.basic_noisy_selfloop_network`.
@@ -222,7 +197,6 @@ def basic_noisy_selfloop_subsystem():
     return Subsystem(net, state)
 
 
-@register_example
 def residue_network():
     """The network for the residue example.
 
@@ -274,7 +248,6 @@ def residue_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
 def residue_subsystem():
     """The subsystem containing all the nodes of the
     :func:`~pyphi.examples.residue_network`.
@@ -284,7 +257,6 @@ def residue_subsystem():
     return Subsystem(net, state)
 
 
-@register_example
 def xor_network():
     """A fully connected system of three XOR gates. In the state ``(0, 0, 0)``,
     none of the elementary mechanisms exist.
@@ -333,7 +305,6 @@ def xor_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
 def xor_subsystem():
     """The subsystem containing all the nodes of the
     :func:`~pyphi.examples.xor_network`.
@@ -343,7 +314,6 @@ def xor_subsystem():
     return Subsystem(net, state)
 
 
-@register_example
 def cond_depend_tpm():
     """A system of two general logic gates A and B such if they are in the same
     state they stay the same, but if they are in different states, they flip
@@ -391,7 +361,6 @@ def cond_depend_tpm():
     return tpm
 
 
-@register_example
 def cond_independ_tpm():
     """A system of three general logic gates A, B and C such that: if A and B
     are in the same state then they stay the same; if they are in different
@@ -459,7 +428,6 @@ def cond_independ_tpm():
     return tpm
 
 
-@register_example
 def propagation_delay_network():
     """A version of the primary example from the IIT 3.0 paper with
     deterministic COPY gates on each connection. These copy gates essentially
@@ -568,7 +536,6 @@ def propagation_delay_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
 def macro_network():
     """A network of micro elements which has greater integrated information
     after coarse graining to a macro scale.
@@ -596,7 +563,6 @@ def macro_network():
     return Network(tpm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
 def macro_subsystem():
     """A subsystem containing all the nodes of
     :func:`~pyphi.examples.macro_network`.
@@ -606,7 +572,6 @@ def macro_subsystem():
     return Subsystem(net, state)
 
 
-@register_example
 def blackbox_network():
     """A micro-network to demonstrate blackboxing.
 
@@ -684,7 +649,6 @@ def blackbox_network():
     return Network(tpm, cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
 def rule110_network():
     """A network of three elements which follows the logic of the Rule 110
     cellular automaton with current and previous state (0, 0, 0).
@@ -698,20 +662,14 @@ def rule110_network():
         [0, 1, 1],
         [1, 1, 1],
         [1, 1, 1],
-        [0, 0, 0]
+        [0, 0, 0],
     ])
     # fmt: on
     return Network(tpm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def rule110_subsystem():
-    return Subsystem(rule110_network(), (0, 0, 0), nodes=(0, 1, 2))
-
-
-@register_example
 def rule154_network():
-    """A network of five elements which follows the logic of the Rule 154
+    """A network of three elements which follows the logic of the Rule 154
     cellular automaton.
     """
     # fmt: off
@@ -760,13 +718,7 @@ def rule154_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def rule154_subsystem():
-    return Subsystem(rule154_network(), (0,)*5)
-
-
-@register_example
-def fig1a_network():
+def fig1a():
     """The network shown in Figure 1A of the 2014 IIT 3.0 paper."""
     # fmt: off
     tpm = np.array([
@@ -847,8 +799,7 @@ def fig1a_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig3a_network():
+def fig3a():
     """The network shown in Figure 3A of the 2014 IIT 3.0 paper."""
     # fmt: off
     tpm = np.array([
@@ -879,8 +830,7 @@ def fig3a_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig3b_network():
+def fig3b():
     """The network shown in Figure 3B of the 2014 IIT 3.0 paper."""
     # fmt: off
     tpm = np.array([
@@ -911,8 +861,7 @@ def fig3b_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig4_network():
+def fig4():
     """The network shown in Figures 4, 6, 8, 9 and 10 of the 2014 IIT 3.0 paper.
 
     Diagram::
@@ -949,13 +898,7 @@ def fig4_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig4_subsystem():
-    return Subsystem(fig4_network(), state=(1, 0, 1), nodes=(0, 1, 2))
-
-
-@register_example
-def fig5a_network():
+def fig5a():
     """The network shown in Figure 5A of the 2014 IIT 3.0 paper.
 
     Diagram::
@@ -991,25 +934,19 @@ def fig5a_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig5a_subsystem():
-    return Subsystem(fig5a_network(), state=(0, 0, 0), nodes=(0, 1, 2))
-
-
-@register_example
-def fig5b_network():
+def fig5b():
     """The network shown in Figure 5B of the 2014 IIT 3.0 paper.
 
     Diagram::
 
                  +~~~~~~~+
             +~~~~+   A   +~~~~+
-            |    |       |    |
+            |    | (AND) |    |
             |    +~~~~~~~+    |
             v                 v
         +~~~~~~~~+       +~~~~~~~~+
         |    B   |<~~~~~~+   C    |
-        | (AND)  +~~~~~~>|  (OR)  |
+        | (COPY) +~~~~~~>| (COPY) |
         +~~~~~~~~+       +~~~~~~~~+
 
     """
@@ -1033,20 +970,14 @@ def fig5b_network():
     return Network(tpm, cm=cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def fig5b_subsystem():
-    return Subsystem(fig5b_network(), state=(1, 0, 1), nodes=(0, 1, 2))
-
-
 # The networks in figures 4, 6 and 8 are the same.
-fig6_network = fig8_network = fig9_network = fig10_network = fig4_network
+fig6, fig8, fig9, fig10 = 4 * (fig4,)
 
 # The network in Figure 14 is the same as that in Figure 1A.
-fig14_network = fig1a_network
+fig14 = fig1a
 
 
-@register_example
-def fig16_network():
+def fig16():
     """The network shown in Figure 5B of the 2014 IIT 3.0 paper."""
     # fmt: off
     tpm = np.array([
@@ -1195,8 +1126,7 @@ def fig16_network():
 # Actual Causation
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-@register_example
-def actual_causation_network():
+def actual_causation():
     """The actual causation example network, consisting of an ``OR`` and
     ``AND`` gate with self-loops.
     """
@@ -1215,7 +1145,6 @@ def actual_causation_network():
     return Network(tpm, cm, node_labels=('OR', 'AND'))
 
 
-@register_example
 def disjunction_conjunction_network():
     """The disjunction-conjunction example from Actual Causation Figure 7.
 
@@ -1251,8 +1180,7 @@ def disjunction_conjunction_network():
     return Network(tpm, cm, node_labels=LABELS[:tpm.shape[1]])
 
 
-@register_example
-def prevention_transition():
+def prevention():
     """The |Transition| for the prevention example from Actual Causation
     Figure 5D.
     """
@@ -1280,13 +1208,6 @@ def prevention_transition():
     return Transition(network, x_state, y_state, (0, 1), (2,))
 
 
-@register_example
-@config.override(
-    PARTITION_TYPE='TRI',
-    REPERTOIRE_DISTANCE='BLD',
-    VALIDATE_SUBSYSTEM_STATES=False,
-    ACTUAL_CAUSATION_MEASURE='WPMI',
-)
 def frog_example():
     """
     Example used in the paper::
@@ -1295,167 +1216,175 @@ def frog_example():
         Grasso, M, Albantakis, L, Lang, J, & Tononi, G
 
     """
-    def LogFunc(x,l,k,x0):
-        y = 1/(l+np.e**(-k*(x-x0)))
-        return y
+    with config.override(
+        PARTITION_TYPE='TRI',
+        MEASURE='BLD',
+        VALIDATE_SUBSYSTEM_STATES=False,
+        PICK_SMALLEST_PURVIEW=True,
+        ACTUAL_CAUSATION_MEASURE='WPMI',
+    ):
+        def LogFunc(x,l,k,x0):
+            y = 1/(l+np.e**(-k*(x-x0)))
+            return y
 
-    def Gauss(x, mu, si):
-        y = np.exp(-.5*(((x-mu)/si)**2))
-        return y
+        def Gauss(x, mu, si):
+            y = np.exp(-.5*(((x-mu)/si)**2))
+            return y
 
-    def NR(x, exponent, threshold):
-        x_exp = x**exponent
-        y = x_exp/(threshold + x_exp)
-        return y
+        def NR(x, exponent, threshold):
+            x_exp = x**exponent
+            y = x_exp/(threshold + x_exp)
+            return y
 
-    def get_net(mech_func, weights, mu=None, si=None, exp=None, th=None, l=None, k=None, x0=None, input_nodes=None, input_modifier=None, node_labels=None, network_name=None, pickle_network=True):
-        """
-        Returns a pyphi network (with the specified activation function)
+        def get_net(mech_func, weights, mu=None, si=None, exp=None, th=None, l=None, k=None, x0=None, input_nodes=None, input_modifier=None, node_labels=None, network_name=None, pickle_network=True):
+            """
+            Returns a pyphi network (with the specified activation function)
 
-        Args:
-            mech_func: (list) list of mechanism function labels ('g' for Gaussian, 'nr' or 's' for Naka-Rushton, 'l' for LogFunc)
-            weights: (numpy array) matrix of node by node weights (x sends to y)
-            mu = mean (Gauss)
-            si = standard deviation (Gauss)
-            exp = exponent (NR or MvsG)
-            th = threshold (NR) or curve steepness (MvsG)
-            x0 = midpoint value (LogFunc)
-            l = max value (LogFunc)
-            k = growth rate (LogFunc)
-            gridsize = number of network nodes in the grid excluded inputs
-        """
-        weights = weights.T
-        node_indices = [n for n in range(len(weights))]
-        nodes_n = len(node_indices)
+            Args:
+                mech_func: (list) list of mechanism function labels ('g' for Gaussian, 'nr' or 's' for Naka-Rushton, 'l' for LogFunc)
+                weights: (numpy array) matrix of node by node weights (x sends to y)
+                mu = mean (Gauss)
+                si = standard deviation (Gauss)
+                exp = exponent (NR or MvsG)
+                th = threshold (NR) or curve steepness (MvsG)
+                x0 = midpoint value (LogFunc)
+                l = max value (LogFunc)
+                k = growth rate (LogFunc)
+                gridsize = number of network nodes in the grid excluded inputs
+            """
+            weights = weights.T
+            node_indices = [n for n in range(len(weights))]
+            nodes_n = len(node_indices)
 
-        if node_labels is None:
-            node_labels = [string.ascii_uppercase[n] for n in range(len(weights))]
+            if node_labels is None:
+                node_labels = [string.ascii_uppercase[n] for n in range(len(weights))]
 
-        mechs_pset = list(powerset(range(nodes_n),nonempty=True))
-        states = list(all_states(nodes_n))
-        tpm = np.zeros([2**nodes_n,nodes_n])
+            mechs_pset = list(powerset(range(nodes_n),nonempty=True))
+            states = list(all_states(nodes_n))
+            tpm = np.zeros([2**nodes_n,nodes_n])
 
-        for s in range(len(states)):
-            state = states[s]
-            tpm_line = []
+            for s in range(len(states)):
+                state = states[s]
+                tpm_line = []
 
-            for z in node_indices:
-                # g = Gaussian
-                if mech_func[z]=='g':
-                    val = Gauss(sum(state*np.array([weights[z][n] for n in node_indices])),mu,si)
-                # nr = Naka Rushton, s = space
-                elif mech_func[z]=='nr' or mech_func[z]=='s':
-                    input_sum = sum(state*weights[z])
-                    val = NR(input_sum,exp,th)
-                # l = LogFunc
-                elif mech_func[z]=='l':
-                    val = LogFunc(sum(state*np.array([weights[z][n] for n in node_indices])),l,k,x0)
-                # i = inhibiting input
-                elif mech_func[z]=='i':
-                    non_input_nodes = [n for n in node_indices if n not in input_nodes]
-                    input_weights = [-input_modifier if state[n]==0 else 1 for n in input_nodes]*np.array([weights[z][n] for n in input_nodes])
-                    other_weights = [state[n] for n in non_input_nodes]*np.array([weights[z][n] for n in non_input_nodes])
-                    weights_sum = sum(input_weights)+sum(other_weights)
-                    val = Gauss(weights_sum,mu,si)
-                else:
-                    raise NameError("Mechanism function not recognized")
+                for z in node_indices:
+                    # g = Gaussian
+                    if mech_func[z]=='g':
+                        val = Gauss(sum(state*np.array([weights[z][n] for n in node_indices])),mu,si)
+                    # nr = Naka Rushton, s = space
+                    elif mech_func[z]=='nr' or mech_func[z]=='s':
+                        input_sum = sum(state*weights[z])
+                        val = NR(input_sum,exp,th)
+                    # l = LogFunc
+                    elif mech_func[z]=='l':
+                        val = LogFunc(sum(state*np.array([weights[z][n] for n in node_indices])),l,k,x0)
+                    # i = inhibiting input
+                    elif mech_func[z]=='i':
+                        non_input_nodes = [n for n in node_indices if n not in input_nodes]
+                        input_weights = [-input_modifier if state[n]==0 else 1 for n in input_nodes]*np.array([weights[z][n] for n in input_nodes])
+                        other_weights = [state[n] for n in non_input_nodes]*np.array([weights[z][n] for n in non_input_nodes])
+                        weights_sum = sum(input_weights)+sum(other_weights)
+                        val = Gauss(weights_sum,mu,si)
+                    else:
+                        raise NameError("Mechanism function not recognized")
 
-                tpm_line.append(val)
+                    tpm_line.append(val)
 
-            tpm[s] = tuple(tpm_line)
+                tpm[s] = tuple(tpm_line)
 
-        cm = np.array([[np.float(1) if w else 0 for w in weights[n]] for n in range(len(weights))])
-        cm = cm.T
-        network = Network(tpm, cm, node_labels)
+            cm = np.array([[np.float(1) if w else 0 for w in weights[n]] for n in range(len(weights))])
+            cm = cm.T
+            network = Network(tpm, cm, node_labels)
 
-        return network
+            return network
 
-    # F3 Frog
-    print('F3 frog:\n')
-    mu = 1
-    si = .3
+        # F3 Frog
+        print('F3 frog:\n')
+        mu = 1
+        si = .3
 
-    mech_func = [
-        'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g']
-    #'S1','S2','S3','H1','H2','H3','M1','M2'
+        mech_func = [
+            'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g']
+        #'S1','S2','S3','H1','H2','H3','M1','M2'
 
-    weights = np.array([
-        [ 0, 0, 0, 1,.5, 0, 0, 0],#S1
-        [ 0, 0, 0,.5,.9,.5, 0, 0],#S2
-        [ 0, 0, 0, 0,.5, 1, 0, 0],#S3
-        [ 0, 0, 0, 0, 0, 0,.8, 0],#H1
-        [ 0, 0, 0, 0, 0, 0,.2,.2],#H3
-        [ 0, 0, 0, 0, 0, 0, 0,.8],#H2
-        [ 0, 0, 0, 0, 0, 0, 0, 0],#M1
-        [ 0, 0, 0, 0, 0, 0, 0, 0],#M2
-    ])  #S1,S2,S3,H1,H3,H2,M1,M2
+        weights = np.array([
 
-    node_labels = ['SL','SC','SR','CL','CC','CR','ML','MR']
+            [ 0, 0, 0, 1,.5, 0, 0, 0],#S1
+            [ 0, 0, 0,.5,.9,.5, 0, 0],#S2
+            [ 0, 0, 0, 0,.5, 1, 0, 0],#S3
+            [ 0, 0, 0, 0, 0, 0,.8, 0],#H1
+            [ 0, 0, 0, 0, 0, 0,.2,.2],#H3
+            [ 0, 0, 0, 0, 0, 0, 0,.8],#H2
+            [ 0, 0, 0, 0, 0, 0, 0, 0],#M1
+            [ 0, 0, 0, 0, 0, 0, 0, 0],#M2
+        ])  #S1,S2,S3,H1,H3,H2,M1,M2
 
-    network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
+        node_labels = ['SL','SC','SR','CL','CC','CR','ML','MR']
 
-    transition = actual.Transition(network, (1,0,1,1,1,1,1,1),(1,0,1,1,1,1,1,1),(0,1,2,3,4,5),(3,4,5,6,7))
-    print(transition)
-    account = actual.account(transition)
-    print(account)
+        network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
 
-    # F2 Frog
-    print('F2 frog:\n')
+        transition = actual.Transition(network, (1,0,1,1,1,1,1,1),(1,0,1,1,1,1,1,1),(0,1,2,3,4,5),(3,4,5,6,7))
+        print(transition)
+        account = actual.account(transition)
+        print(account)
 
-    mu = 1
-    si = .3
+        # F2 Frog
+        print('F2 frog:\n')
 
-    mech_func = [
-        'g', 'g', 'g', 'g', 'g', 'g', 'g',
-    ]
-    #'S1','S2','S3', N1','N2','M1','M2',
+        mu = 1
+        si = .3
 
-    weights = np.array([
+        mech_func = [
+            'g', 'g', 'g', 'g', 'g', 'g', 'g',
+        ]
+        #'S1','S2','S3', N1','N2','M1','M2',
 
-        [ 0, 0, 0, 1, 0, 0, 0],#S1
-        [ 0, 0, 0,.5,.5, 0, 0],#S2
-        [ 0, 0, 0, 0, 1, 0, 0],#S3
-        [ 0, 0, 0, 0, 0,.8,.2],#H1
-        [ 0, 0, 0, 0, 0,.2,.8],#H2
-        [ 0, 0, 0, 0, 0, 0, 0],#M1
-        [ 0, 0, 0, 0, 0, 0, 0],#M2
-    ])  #S1,S2,S3,H1,H2,M1,M2
+        weights = np.array([
 
-    node_labels = ['SL','SC','SR','CL','CR','ML','MR']
+            [ 0, 0, 0, 1, 0, 0, 0],#S1
+            [ 0, 0, 0,.5,.5, 0, 0],#S2
+            [ 0, 0, 0, 0, 1, 0, 0],#S3
+            [ 0, 0, 0, 0, 0,.8,.2],#H1
+            [ 0, 0, 0, 0, 0,.2,.8],#H2
+            [ 0, 0, 0, 0, 0, 0, 0],#M1
+            [ 0, 0, 0, 0, 0, 0, 0],#M2
+        ])  #S1,S2,S3,H1,H2,M1,M2
 
-    network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
+        node_labels = ['SL','SC','SR','CL','CR','ML','MR']
 
-    transition = actual.Transition(network, (1,0,1,1,1,1,1),(1,0,1,1,1,1,1),(0,1,2,3,4),(3,4,5,6))
-    print(transition)
-    account = actual.account(transition)
-    print(account)
+        network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
 
-    # F1 Frog
-    print('\n\nF1 frog:\n')
-    mu = 1
-    si = .3
+        transition = actual.Transition(network, (1,0,1,1,1,1,1),(1,0,1,1,1,1,1),(0,1,2,3,4),(3,4,5,6))
+        print(transition)
+        account = actual.account(transition)
+        print(account)
 
-    mech_func = [
-        'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g']
-    #'S1','S2','S3','S4','N1','N2','M1','M2',
+        # F1 Frog
+        print('\n\nF1 frog:\n')
+        mu = 1
+        si = .3
 
-    weights = np.array([
+        mech_func = [
+            'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g']
+        #'S1','S2','S3','S4','N1','N2','M1','M2',
 
-        [ 0, 0, 0, 0, 1, 0, 0, 0],#S1
-        [ 0, 0, 0, 0,.5, 0, 0, 0],#S2
-        [ 0, 0, 0, 0, 0,.5, 0, 0],#S3
-        [ 0, 0, 0, 0, 0, 1, 0, 0],#S4
-        [ 0, 0, 0, 0, 0, 0, 1, 0],#H1
-        [ 0, 0, 0, 0, 0, 0, 0, 1],#H2
-        [ 0, 0, 0, 0, 0, 0, 0, 0],#M1
-        [ 0, 0, 0, 0, 0, 0, 0, 0],#M2
-    ])  #S1,S2,S3,S4,H1,H2,M1,M2
+        weights = np.array([
 
-    node_labels = ['S1','S2','S3','S4','H1','H2','M1','M2']
+            [ 0, 0, 0, 0, 1, 0, 0, 0],#S1
+            [ 0, 0, 0, 0,.5, 0, 0, 0],#S2
+            [ 0, 0, 0, 0, 0,.5, 0, 0],#S3
+            [ 0, 0, 0, 0, 0, 1, 0, 0],#S4
+            [ 0, 0, 0, 0, 0, 0, 1, 0],#H1
+            [ 0, 0, 0, 0, 0, 0, 0, 1],#H2
+            [ 0, 0, 0, 0, 0, 0, 0, 0],#M1
+            [ 0, 0, 0, 0, 0, 0, 0, 0],#M2
+        ])  #S1,S2,S3,S4,H1,H2,M1,M2
 
-    network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
+        node_labels = ['S1','S2','S3','S4','H1','H2','M1','M2']
 
-    transition = actual.Transition(network,(1,0,0,1,1,1,1,1),(1,0,0,1,1,1,1,1),(0,1,2,3,4,5),(4,5,6,7))
-    print(transition)
-    account = actual.account(transition)
-    print(account)
+        network = get_net(mech_func, weights, mu=mu, si=si, node_labels=node_labels)
+
+        transition = actual.Transition(network,(1,0,0,1,1,1,1,1),(1,0,0,1,1,1,1,1),(0,1,2,3,4,5),(4,5,6,7))
+        print(transition)
+        account = actual.account(transition)
+        print(account)
